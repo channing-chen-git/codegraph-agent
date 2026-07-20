@@ -1,0 +1,22 @@
+[
+  {
+    "id": "impact_pricing",
+    "query": "If calculate_total changes, which code may be affected?",
+    "expected_terms": ["CheckoutService", "discount_total", "services/checkout.py"]
+  },
+  {
+    "id": "call_chain_checkout",
+    "query": "Show the call chain from quote_with_coupon",
+    "expected_terms": ["discount_total", "calculate_total", "apply_tax"]
+  },
+  {
+    "id": "search_tax",
+    "query": "Where is regional tax applied?",
+    "expected_terms": ["apply_tax", "services/tax.py"]
+  },
+  {
+    "id": "test_recommendation",
+    "query": "Recommend tests for calculate_total",
+    "expected_terms": ["happy_path", "edge_cases"]
+  }
+]

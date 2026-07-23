@@ -47,6 +47,23 @@ Repository
 
 ## Quick Start
 
+### Isolated Environment
+
+Use `venv`:
+
+```bash
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+Or use Conda:
+
+```bash
+conda env create -f environment.yml
+conda activate codegraph-agent
+```
+
 Index the sample repository:
 
 ```bash
@@ -76,6 +93,13 @@ Optional API:
 ```bash
 pip install -r requirements.txt
 uvicorn codegraph_agent.api:app --reload --port 8000
+```
+
+Docker:
+
+```bash
+docker build -t codegraph-agent .
+docker run -p 8000:8000 codegraph-agent
 ```
 
 Then call:

@@ -82,6 +82,15 @@ Run offline evaluation:
 python -m codegraph_agent.eval_runner --repo examples/mini_repo --tasks eval/tasks.json
 ```
 
+Runtime artifacts such as traces and evaluation reports are written to a
+user-writable runtime directory by default. Set `CODEGRAPH_RUNTIME_DIR` to
+override it:
+
+```bash
+CODEGRAPH_RUNTIME_DIR=./runtime
+python -m codegraph_agent.eval_runner --repo examples/mini_repo --tasks eval/tasks.json
+```
+
 Run tests:
 
 ```bash
@@ -134,7 +143,9 @@ This is a lightweight code-intelligence prototype. It does not train a code
 model, does not claim full semantic equivalence checking, and does not replace a
 compiler, type checker or production static-analysis engine. Python analysis is
 AST-based; C/C++ analysis is intentionally lightweight and should be replaced by
-Tree-sitter, clangd or libclang for production-grade C++ understanding.
+Tree-sitter, clangd or libclang for production-grade C++ understanding. The
+current planner is deterministic and tool-oriented; an LLM planner can be added
+behind the same tool interface when model-backed planning is required.
 
 The current design keeps clear extension points for:
 

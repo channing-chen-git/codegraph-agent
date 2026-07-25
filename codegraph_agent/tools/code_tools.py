@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import asdict
+import re
 from typing import Dict, List
 
 from ..graph_store import CodeGraph
@@ -122,6 +123,9 @@ class CodeIntelligenceTools:
         return ToolResult("repository_summary", summary, data, 0.9)
 
     def _best_symbol(self, query: str) -> CodeSymbol | None:
+        exact = self._exact_symbol_from_query(query)
+        if exact is not None:
+            return exact
         direct = self.graph.find_symbols(query)
         if direct:
             return direct[0]
@@ -129,6 +133,30 @@ class CodeIntelligenceTools:
         if not hits:
             return None
         return self.graph.symbols.get(hits[0].symbol_id)
+
+    def _exact_symbol_from_query(self, query: str) -> CodeSymbol | None:
+        query_identifiers = {
+            token.lower()
+            for token in re.findall(r"[A-Za-z_][A-Za-z_0-9]*", query)
+        }
+        if not query_identifiers:
+            return None
+        matches = [
+            symbol
+            for symbol in self.graph.symbols.values()
+            if symbol.name.lower() in query_identifiers
+        ]
+        if not matches:
+            return None
+        preferred_kinds = {"function": 0, "method": 1, "class": 2}
+        matches.sort(
+            key=lambda symbol: (
+                preferred_kinds.get(symbol.kind, 9),
+                symbol.file_path,
+                symbol.line_start,
+            )
+        )
+        return matches[0]
 
     def _edge_view(self, edge: CodeEdge) -> Dict:
         target = self.graph.symbols.get(edge.target)

@@ -8,11 +8,12 @@ from pathlib import Path
 from typing import List
 
 from ..models import AgentTraceStep
+from .config import resolve_runtime_path
 
 
 class TraceRecorder:
     def __init__(self, trace_dir: str | Path = "runs/traces"):
-        self.trace_dir = Path(trace_dir)
+        self.trace_dir = resolve_runtime_path(trace_dir)
         self.trace_id = uuid.uuid4().hex[:12]
         self.steps: List[AgentTraceStep] = []
         self.started_at = time.time()

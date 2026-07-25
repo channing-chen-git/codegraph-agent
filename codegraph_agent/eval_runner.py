@@ -6,11 +6,16 @@ from pathlib import Path
 from typing import Dict, List
 
 from .agent import CodeGraphAgent
+from .runtime.config import resolve_runtime_path
 
 
-def run_eval(repo_path: str | Path, tasks_path: str | Path) -> Dict:
+def run_eval(
+    repo_path: str | Path,
+    tasks_path: str | Path,
+    trace_dir: str | Path = "eval_traces",
+) -> Dict:
     tasks = json.loads(Path(tasks_path).read_text(encoding="utf-8"))
-    agent = CodeGraphAgent(repo_path, trace_dir="runs/eval_traces")
+    agent = CodeGraphAgent(repo_path, trace_dir=trace_dir)
     results = []
     passed = 0
     for task in tasks:
@@ -45,10 +50,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run CodeGraphAgent offline evaluation.")
     parser.add_argument("--repo", default="examples/mini_repo")
     parser.add_argument("--tasks", default="eval/tasks.json")
-    parser.add_argument("--out", default="runs/eval_result.json")
+    parser.add_argument("--out", default="eval_result.json")
+    parser.add_argument("--trace-dir", default="eval_traces")
     args = parser.parse_args()
-    result = run_eval(args.repo, args.tasks)
-    output = Path(args.out)
+    result = run_eval(args.repo, args.tasks, trace_dir=args.trace_dir)
+    output = resolve_runtime_path(args.out)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(result, ensure_ascii=False, indent=2))

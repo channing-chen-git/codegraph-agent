@@ -13,9 +13,16 @@ def run_eval(
     repo_path: str | Path,
     tasks_path: str | Path,
     trace_dir: str | Path = "eval_traces",
+    use_llm: bool = False,
+    require_llm: bool = False,
 ) -> Dict:
     tasks = json.loads(Path(tasks_path).read_text(encoding="utf-8"))
-    agent = CodeGraphAgent(repo_path, trace_dir=trace_dir)
+    agent = CodeGraphAgent(
+        repo_path,
+        trace_dir=trace_dir,
+        use_llm=use_llm,
+        require_llm=require_llm,
+    )
     results = []
     passed = 0
     for task in tasks:
@@ -52,8 +59,16 @@ def main() -> None:
     parser.add_argument("--tasks", default="eval/tasks.json")
     parser.add_argument("--out", default="eval_result.json")
     parser.add_argument("--trace-dir", default="eval_traces")
+    parser.add_argument("--use-llm", action="store_true", help="Use LLM planner/composer for evaluation")
+    parser.add_argument("--require-llm", action="store_true", help="Fail evaluation if LLM calls fail")
     args = parser.parse_args()
-    result = run_eval(args.repo, args.tasks, trace_dir=args.trace_dir)
+    result = run_eval(
+        args.repo,
+        args.tasks,
+        trace_dir=args.trace_dir,
+        use_llm=args.use_llm,
+        require_llm=args.require_llm,
+    )
     output = resolve_runtime_path(args.out)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")

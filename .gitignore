@@ -7,6 +7,7 @@ __pycache__/
 venv/
 runs/
 /runtime/
+.codegraph_runtime/
 *.log
 .env
 .env.*

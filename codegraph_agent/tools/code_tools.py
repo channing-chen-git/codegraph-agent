@@ -15,6 +15,80 @@ class CodeIntelligenceTools:
         self.graph = graph
         self.retriever = CodeRetriever(graph.index)
 
+    def function_schemas(self) -> List[Dict]:
+        query_schema = {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Natural-language code question or symbol name.",
+                }
+            },
+            "required": ["query"],
+        }
+        depth_schema = {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Symbol name or code question to analyze.",
+                },
+                "depth": {
+                    "type": "integer",
+                    "description": "Maximum graph traversal depth.",
+                    "default": 2,
+                    "minimum": 1,
+                    "maximum": 5,
+                },
+            },
+            "required": ["query"],
+        }
+        return [
+            self._function_schema(
+                "repository_summary",
+                "Summarize indexed files, symbols, languages and dependency edge counts.",
+                {"type": "object", "properties": {}, "required": []},
+            ),
+            self._function_schema(
+                "search_code",
+                "Retrieve relevant symbols by name, signature, docstring and source snippet.",
+                {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Search query."},
+                        "top_k": {
+                            "type": "integer",
+                            "description": "Number of symbol hits to return.",
+                            "default": 8,
+                            "minimum": 1,
+                            "maximum": 20,
+                        },
+                    },
+                    "required": ["query"],
+                },
+            ),
+            self._function_schema(
+                "explain_symbol",
+                "Explain one symbol and show direct incoming/outgoing call evidence.",
+                query_schema,
+            ),
+            self._function_schema(
+                "call_chain",
+                "Trace outgoing call-chain edges from a symbol.",
+                depth_schema,
+            ),
+            self._function_schema(
+                "impact_analysis",
+                "Find reverse dependencies and impacted files if a symbol changes.",
+                depth_schema,
+            ),
+            self._function_schema(
+                "test_recommendations",
+                "Recommend unit and integration tests based on symbol impact evidence.",
+                query_schema,
+            ),
+        ]
+
     def search_code(self, query: str, top_k: int = 8) -> ToolResult:
         hits = self.retriever.search(query, top_k=top_k)
         data = {"hits": [asdict(hit) for hit in hits]}
@@ -170,4 +244,14 @@ class CodeIntelligenceTools:
             "evidence": edge.evidence,
             "file_path": edge.file_path,
             "line": edge.line,
+        }
+
+    def _function_schema(self, name: str, description: str, parameters: Dict) -> Dict:
+        return {
+            "type": "function",
+            "function": {
+                "name": name,
+                "description": description,
+                "parameters": parameters,
+            },
         }

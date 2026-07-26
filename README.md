@@ -1,9 +1,10 @@
 # CodeGraphAgent
 
-CodeGraphAgent is a repository-level code understanding agent for analyzing
-large Python and C/C++ codebases. It builds a lightweight symbol graph, retrieves
-relevant code context, runs deterministic code-intelligence tools, and records
-agent traces for evaluation.
+CodeGraphAgent is an LLM-guided repository-level code understanding agent for
+analyzing large Python and C/C++ codebases. It builds a lightweight symbol graph,
+uses an OpenAI-compatible LLM to plan tools and compose grounded answers, runs
+deterministic code-intelligence tools for factual analysis, and records agent
+traces for evaluation.
 
 The project focuses on engineering-scale code context rather than single-file
 completion. It is designed around questions such as:
@@ -22,6 +23,8 @@ completion. It is designed around questions such as:
   calls.
 - Symbol graph with `defines`, `calls`, `imports` and `inherits` edges.
 - BM25-like code retriever over signatures, docstrings and source snippets.
+- LLM planner and answer composer with deterministic fallback for offline tests.
+- OpenAI-compatible Function Calling schemas for each code-intelligence tool.
 - Tool-using Agent workflow for repository summary, search, symbol explanation,
   call-chain tracing, impact analysis and test recommendation.
 - Agent trace output for every run.
@@ -38,9 +41,9 @@ Repository
        -> Symbol Graph
        -> CodeRetriever
     -> CodeGraphAgent
-       -> plan query
+       -> LLM planner selects tools from Function Calling schemas
        -> call code-intelligence tools
-       -> compose answer with evidence
+       -> LLM composer writes an evidence-grounded answer
        -> save Agent Trace
     -> Eval Runner
 ```
@@ -74,6 +77,24 @@ Ask a code-understanding question:
 
 ```bash
 python -m codegraph_agent.cli --repo examples/mini_repo --query "If calculate_total changes, which code may be affected?"
+```
+
+Configure an OpenAI-compatible LLM for planner/composer mode:
+
+```bash
+OPENAI_API_KEY=your-key
+OPENAI_BASE_URL=https://api.openai.com/v1
+CODEGRAPH_LLM_MODEL=gpt-4o-mini
+```
+
+The normal CLI/API path requires the LLM planner and composer to succeed. If the
+API key or endpoint is missing, the run fails instead of silently pretending to
+be an LLM Agent.
+
+For CI or offline demos, use deterministic fallback:
+
+```bash
+python -m codegraph_agent.cli --repo examples/mini_repo --query "If calculate_total changes, which code may be affected?" --no-llm
 ```
 
 Run offline evaluation:
@@ -137,21 +158,26 @@ The agent uses:
 
 and returns impacted callers, impacted files and focused test suggestions.
 
+The planner sees these function-callable tools: `repository_summary`,
+`search_code`, `explain_symbol`, `call_chain`, `impact_analysis`, and
+`test_recommendations`. The LLM decides which functions to call, while the
+symbol graph tools produce the factual evidence used in the final answer.
+
 ## Evidence Boundary
 
-This is a lightweight code-intelligence prototype. It does not train a code
-model, does not claim full semantic equivalence checking, and does not replace a
-compiler, type checker or production static-analysis engine. Python analysis is
-AST-based; C/C++ analysis is intentionally lightweight and should be replaced by
-Tree-sitter, clangd or libclang for production-grade C++ understanding. The
-current planner is deterministic and tool-oriented; an LLM planner can be added
-behind the same tool interface when model-backed planning is required.
+This is a lightweight code-intelligence Agent prototype. It does not train a
+code model, does not claim full semantic equivalence checking, and does not
+replace a compiler, type checker or production static-analysis engine. The LLM
+plans tool usage and composes the final explanation, while symbol-graph tools
+produce the factual evidence. Python analysis is AST-based; C/C++ analysis is
+intentionally lightweight and should be replaced by Tree-sitter, clangd or
+libclang for production-grade C++ understanding.
 
 The current design keeps clear extension points for:
 
 - Tree-sitter based multi-language parsing
 - embedding-based code retrieval
-- LLM planner integration
+- richer LLM tool-calling schemas
 - learned reranking
 - sandboxed test execution
 - large-repository sharding and cache invalidation

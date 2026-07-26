@@ -27,7 +27,7 @@ class RepositoryIndexerTest(unittest.TestCase):
         self.assertTrue(any(edge.evidence == "apply_tax" for edge in call_edges))
 
     def test_agent_impact_analysis_mentions_callers(self):
-        agent = CodeGraphAgent(MINI_REPO, trace_dir=self.trace_dir)
+        agent = CodeGraphAgent(MINI_REPO, trace_dir=self.trace_dir, use_llm=False, require_llm=False)
         response = agent.answer("If calculate_total changes, which code may be affected?")
         blob = str(response.evidence)
         self.assertIn("'name': 'calculate_total'", blob)
@@ -35,11 +35,21 @@ class RepositoryIndexerTest(unittest.TestCase):
         self.assertIn("services/checkout.py", blob)
 
     def test_agent_call_chain(self):
-        agent = CodeGraphAgent(MINI_REPO, trace_dir=self.trace_dir)
+        agent = CodeGraphAgent(MINI_REPO, trace_dir=self.trace_dir, use_llm=False, require_llm=False)
         response = agent.answer("Show the call chain from quote_with_coupon")
         blob = response.answer + str(response.evidence)
         self.assertIn("discount_total", blob)
         self.assertIn("calculate_total", blob)
+
+    def test_function_calling_schemas_are_exposed(self):
+        agent = CodeGraphAgent(MINI_REPO, trace_dir=self.trace_dir, use_llm=False, require_llm=False)
+        schemas = agent.tools.function_schemas()
+        names = {schema["function"]["name"] for schema in schemas}
+        self.assertIn("impact_analysis", names)
+        self.assertIn("test_recommendations", names)
+        for schema in schemas:
+            self.assertEqual(schema["type"], "function")
+            self.assertIn("parameters", schema["function"])
 
 
 if __name__ == "__main__":

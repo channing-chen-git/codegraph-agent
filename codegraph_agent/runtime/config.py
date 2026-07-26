@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import tempfile
 from pathlib import Path
 
 
@@ -9,9 +10,7 @@ def default_runtime_dir() -> Path:
     configured = os.getenv("CODEGRAPH_RUNTIME_DIR")
     if configured:
         return Path(configured).expanduser()
-    if os.name == "nt" and os.getenv("LOCALAPPDATA"):
-        return Path(os.getenv("LOCALAPPDATA")) / "codegraph-agent"
-    return Path.home() / ".codegraph-agent"
+    return Path(tempfile.gettempdir()) / "codegraph-agent"
 
 
 def resolve_runtime_path(value: str | Path) -> Path:

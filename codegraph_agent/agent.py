@@ -22,9 +22,10 @@ class CodeGraphAgent:
         use_llm: bool = True,
         require_llm: bool = True,
         llm_client: LLMClient | None = None,
+        graph: CodeGraph | None = None,
     ):
         self.repo_path = Path(repo_path)
-        self.graph: CodeGraph = RepositoryIndexer().build(self.repo_path)
+        self.graph: CodeGraph = graph or RepositoryIndexer().build(self.repo_path)
         self.tools = CodeIntelligenceTools(self.graph)
         self.trace_dir = trace_dir
         self.use_llm = use_llm

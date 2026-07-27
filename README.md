@@ -125,6 +125,11 @@ pip install -r requirements.txt
 uvicorn codegraph_agent.api:app --reload --port 8000
 ```
 
+The API caches the built `CodeGraph` per resolved `repo_path`, so repeated
+questions against the same repository reuse the existing symbol graph instead
+of rescanning the repository on every request. Pass `refresh_index: true` when
+the repository has changed and the graph should be rebuilt.
+
 Docker:
 
 ```bash
@@ -138,7 +143,8 @@ Then call:
 POST /analyze
 {
   "repo_path": "examples/mini_repo",
-  "query": "Show the call chain from quote_with_coupon"
+  "query": "Show the call chain from quote_with_coupon",
+  "refresh_index": false
 }
 ```
 

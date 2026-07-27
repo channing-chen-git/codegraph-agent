@@ -51,6 +51,19 @@ class RepositoryIndexerTest(unittest.TestCase):
             self.assertEqual(schema["type"], "function")
             self.assertIn("parameters", schema["function"])
 
+    def test_agent_can_reuse_prebuilt_graph(self):
+        graph = RepositoryIndexer().build(MINI_REPO)
+        agent = CodeGraphAgent(
+            MINI_REPO,
+            trace_dir=self.trace_dir,
+            use_llm=False,
+            require_llm=False,
+            graph=graph,
+        )
+        self.assertIs(agent.graph, graph)
+        response = agent.answer("If calculate_total changes, which code may be affected?")
+        self.assertIn("impact_analysis", response.tools_used)
+
 
 if __name__ == "__main__":
     unittest.main()

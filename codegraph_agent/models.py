@@ -80,6 +80,9 @@ class AgentTraceStep:
     query: str
     summary: str
     confidence: float
+    round_index: int = 1
+    status: str = "ok"
+    error: str = ""
 
 
 @dataclass
@@ -89,6 +92,10 @@ class AgentResponse:
     evidence: List[Dict]
     trace_path: Optional[str] = None
     confidence: float = 0.0
+    session_id: str = ""
+    memory_path: str = ""
+    rounds: int = 1
+    errors: List[str] = field(default_factory=list)
 
 
 def normalize_path(path: str | Path) -> str:

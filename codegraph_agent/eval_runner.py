@@ -26,7 +26,8 @@ def run_eval(
     results = []
     passed = 0
     for task in tasks:
-        response = agent.answer(task["query"])
+        session_id = f"eval-{task['id']}"
+        response = agent.answer(task["query"], session_id=session_id)
         answer_blob = json.dumps(
             {"answer": response.answer, "evidence": response.evidence},
             ensure_ascii=False,
@@ -43,6 +44,10 @@ def run_eval(
                 "expected_terms": task["expected_terms"],
                 "confidence": response.confidence,
                 "trace_path": response.trace_path,
+                "session_id": response.session_id,
+                "memory_path": response.memory_path,
+                "rounds": response.rounds,
+                "errors": response.errors,
             }
         )
     return {

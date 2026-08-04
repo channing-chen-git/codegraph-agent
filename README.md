@@ -24,9 +24,12 @@ completion. It is designed around questions such as:
 - Symbol graph with `defines`, `calls`, `imports` and `inherits` edges.
 - BM25-like code retriever over signatures, docstrings and source snippets.
 - LLM planner and answer composer with deterministic fallback for offline tests.
+- Multi-round tool loop with lightweight session memory and error guardrails.
 - OpenAI-compatible Function Calling schemas for each code-intelligence tool.
 - Tool-using Agent workflow for repository summary, search, symbol explanation,
   call-chain tracing, impact analysis and test recommendation.
+- PR diff, coverage and runtime-trace evidence tools that complement the static
+  symbol graph for test-impact analysis.
 - Agent trace output for every run.
 - Offline evaluation tasks for code retrieval, dependency reasoning and
   recommendation quality.
@@ -41,10 +44,13 @@ Repository
        -> Symbol Graph
        -> CodeRetriever
     -> CodeGraphAgent
+       -> load session memory
        -> LLM planner selects tools from Function Calling schemas
-       -> call code-intelligence tools
+       -> call code-intelligence tools with guardrails
+       -> optionally merge PR diff / coverage / runtime trace evidence
        -> LLM composer writes an evidence-grounded answer
-       -> save Agent Trace
+       -> repeat for another round if evidence is weak or uncertain
+       -> save Agent Trace and session memory
     -> Eval Runner
 ```
 
@@ -77,6 +83,14 @@ Ask a code-understanding question:
 
 ```bash
 python -m codegraph_agent.cli --repo examples/mini_repo --query "If calculate_total changes, which code may be affected?"
+```
+
+Ask for PR/test evidence:
+
+```bash
+python -m codegraph_agent.cli --repo examples/mini_repo --query "Analyze this PR diff and recommend tests" --no-llm
+python -m codegraph_agent.cli --repo examples/mini_repo --query "Find coverage gaps for calculate_total" --no-llm
+python -m codegraph_agent.cli --repo examples/mini_repo --query "Use runtime trace evidence for calculate_total" --no-llm
 ```
 
 Configure an OpenAI-compatible LLM for planner/composer mode:
@@ -130,6 +144,10 @@ questions against the same repository reuse the existing symbol graph instead
 of rescanning the repository on every request. Pass `refresh_index: true` when
 the repository has changed and the graph should be rebuilt.
 
+The request body also accepts `session_id`, so repeated questions from the same
+conversation reuse lightweight session memory and can trigger a second tool
+round when the first pass is uncertain.
+
 Docker:
 
 ```bash
@@ -165,9 +183,11 @@ The agent uses:
 and returns impacted callers, impacted files and focused test suggestions.
 
 The planner sees these function-callable tools: `repository_summary`,
-`search_code`, `explain_symbol`, `call_chain`, `impact_analysis`, and
-`test_recommendations`. The LLM decides which functions to call, while the
-symbol graph tools produce the factual evidence used in the final answer.
+`search_code`, `explain_symbol`, `call_chain`, `impact_analysis`,
+`test_recommendations`, `pr_change_analysis`, `coverage_gap_analysis`, and
+`runtime_trace_analysis`. The LLM decides which functions to call, while the
+symbol graph and external evidence tools produce the factual evidence used in
+the final answer.
 
 ## Evidence Boundary
 
@@ -179,6 +199,16 @@ produce the factual evidence. Python analysis is AST-based; C/C++ analysis is
 intentionally lightweight and should be replaced by Tree-sitter, clangd or
 libclang for production-grade C++ understanding.
 
+The current agent now also keeps lightweight session memory, retries with a
+second tool round when evidence is weak, and records tool/runtime errors inside
+trace output instead of failing silently.
+
+The current demo now includes sample `changes.diff`, `coverage.json` and
+`runtime_traces.json` files under `examples/mini_repo`. These represent how a
+production deployment can combine static source analysis with CI, coverage and
+observed runtime traces. Static analysis is broad and works before code runs;
+runtime evidence is more factual but only covers executed paths.
+
 The current design keeps clear extension points for:
 
 - Tree-sitter based multi-language parsing
@@ -187,6 +217,9 @@ The current design keeps clear extension points for:
 - learned reranking
 - sandboxed test execution
 - large-repository sharding and cache invalidation
+- PR-diff ingestion from GitHub/GitLab CI
+- coverage ingestion from pytest/coverage.py reports
+- runtime trace ingestion from OpenTelemetry or service-mesh traces
 
 ## Open Source Safety
 

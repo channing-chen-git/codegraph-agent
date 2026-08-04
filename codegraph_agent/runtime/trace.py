@@ -18,7 +18,17 @@ class TraceRecorder:
         self.steps: List[AgentTraceStep] = []
         self.started_at = time.time()
 
-    def add(self, step: str, tool: str, query: str, summary: str, confidence: float) -> None:
+    def add(
+        self,
+        step: str,
+        tool: str,
+        query: str,
+        summary: str,
+        confidence: float,
+        round_index: int = 1,
+        status: str = "ok",
+        error: str = "",
+    ) -> None:
         self.steps.append(
             AgentTraceStep(
                 step=step,
@@ -26,6 +36,9 @@ class TraceRecorder:
                 query=query,
                 summary=summary,
                 confidence=confidence,
+                round_index=round_index,
+                status=status,
+                error=error,
             )
         )
 

@@ -25,6 +25,7 @@ else:
 class QueryRequest(BaseModel):
     repo_path: str
     query: str
+    session_id: str = "default"
     use_llm: bool = True
     require_llm: bool = True
     refresh_index: bool = False
@@ -58,4 +59,4 @@ if app is not None:
             require_llm=request.require_llm,
             graph=graph,
         )
-        return asdict(agent.answer(request.query))
+        return asdict(agent.answer(request.query, session_id=request.session_id))

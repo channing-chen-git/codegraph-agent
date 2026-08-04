@@ -64,6 +64,33 @@ class RepositoryIndexerTest(unittest.TestCase):
         response = agent.answer("If calculate_total changes, which code may be affected?")
         self.assertIn("impact_analysis", response.tools_used)
 
+    def test_pr_change_analysis_uses_diff_evidence(self):
+        agent = CodeGraphAgent(MINI_REPO, trace_dir=self.trace_dir, use_llm=False, require_llm=False)
+        response = agent.answer("Analyze this PR diff and recommend tests")
+        self.assertIn("pr_change_analysis", response.tools_used)
+        blob = str(response.evidence)
+        self.assertIn("changes.diff", blob)
+        self.assertIn("calculate_total", blob)
+        self.assertIn("impact_by_changed_symbol", blob)
+
+    def test_coverage_gap_analysis_uses_coverage_evidence(self):
+        agent = CodeGraphAgent(MINI_REPO, trace_dir=self.trace_dir, use_llm=False, require_llm=False)
+        response = agent.answer("Find coverage gaps for calculate_total")
+        self.assertIn("coverage_gap_analysis", response.tools_used)
+        blob = str(response.evidence)
+        self.assertIn("coverage.json", blob)
+        self.assertIn("file_coverage_percent", blob)
+        self.assertIn("missing_lines_in_symbol", blob)
+
+    def test_runtime_trace_analysis_supplements_static_graph(self):
+        agent = CodeGraphAgent(MINI_REPO, trace_dir=self.trace_dir, use_llm=False, require_llm=False)
+        response = agent.answer("Use runtime trace evidence for calculate_total")
+        self.assertIn("runtime_trace_analysis", response.tools_used)
+        self.assertIn("impact_analysis", response.tools_used)
+        blob = str(response.evidence)
+        self.assertIn("runtime_traces.json", blob)
+        self.assertIn("POST /checkout/quote", blob)
+
 
 if __name__ == "__main__":
     unittest.main()

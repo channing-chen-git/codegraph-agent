@@ -8,6 +8,14 @@ from typing import Dict, List
 from ..graph_store import CodeGraph
 from ..models import CodeEdge, CodeSymbol, ToolResult
 from ..retrieval import CodeRetriever
+from .change_intel import (
+    changed_symbols,
+    load_coverage,
+    load_diff_file,
+    load_runtime_traces,
+    runtime_edges_for_symbol,
+    symbol_coverage,
+)
 
 
 class CodeIntelligenceTools:
@@ -86,6 +94,51 @@ class CodeIntelligenceTools:
                 "test_recommendations",
                 "Recommend unit and integration tests based on symbol impact evidence.",
                 query_schema,
+            ),
+            self._function_schema(
+                "pr_change_analysis",
+                "Analyze changed symbols from a unified diff file and connect them to impact evidence.",
+                {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Natural-language question."},
+                        "diff_path": {
+                            "type": "string",
+                            "description": "Path to a unified diff file, relative to the repository root or absolute.",
+                        },
+                    },
+                    "required": ["query"],
+                },
+            ),
+            self._function_schema(
+                "coverage_gap_analysis",
+                "Compare impacted symbols with coverage.py-style JSON data to find test gaps.",
+                {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Symbol or code question."},
+                        "coverage_path": {
+                            "type": "string",
+                            "description": "Path to coverage JSON, relative to the repository root or absolute.",
+                        },
+                    },
+                    "required": ["query"],
+                },
+            ),
+            self._function_schema(
+                "runtime_trace_analysis",
+                "Use runtime call-trace evidence to supplement static CodeGraph impact analysis.",
+                {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Symbol or code question."},
+                        "trace_path": {
+                            "type": "string",
+                            "description": "Path to runtime trace JSON, relative to the repository root or absolute.",
+                        },
+                    },
+                    "required": ["query"],
+                },
             ),
         ]
 
@@ -178,6 +231,106 @@ class CodeIntelligenceTools:
         summary = f"Generated {len(tests)} focused test recommendations for {symbol.name}."
         return ToolResult("test_recommendations", summary, data, 0.78)
 
+    def pr_change_analysis(self, query: str, diff_path: str = "changes.diff") -> ToolResult:
+        path = self._resolve_artifact_path(diff_path)
+        if not path.exists():
+            return ToolResult(
+                "pr_change_analysis",
+                f"No diff file found at {path}.",
+                {"diff_path": str(path), "changed_files": [], "changed_symbols": []},
+                0.2,
+            )
+        changed_files = load_diff_file(path)
+        symbols = changed_symbols(self.graph.symbols.values(), changed_files)
+        impacted = []
+        for symbol in symbols:
+            impact = self.impact_analysis(symbol.name)
+            impacted.append(
+                {
+                    "changed_symbol": symbol.name,
+                    "file_path": symbol.file_path,
+                    "line_start": symbol.line_start,
+                    "impact": impact.data,
+                }
+            )
+        data = {
+            "diff_path": str(path),
+            "changed_files": [
+                {
+                    "path": item.path,
+                    "added_lines": item.added_lines,
+                    "removed_lines": item.removed_lines,
+                }
+                for item in changed_files
+            ],
+            "changed_symbols": [self._symbol_view(symbol) for symbol in symbols],
+            "impact_by_changed_symbol": impacted,
+        }
+        summary = (
+            f"Diff analysis found {len(changed_files)} changed files and "
+            f"{len(symbols)} changed symbols."
+        )
+        return ToolResult("pr_change_analysis", summary, data, 0.82 if symbols else 0.45)
+
+    def coverage_gap_analysis(self, symbol_query: str, coverage_path: str = "coverage.json") -> ToolResult:
+        path = self._resolve_artifact_path(coverage_path)
+        if not path.exists():
+            return ToolResult(
+                "coverage_gap_analysis",
+                f"No coverage file found at {path}.",
+                {"coverage_path": str(path), "coverage": []},
+                0.2,
+            )
+        symbol = self._best_symbol(symbol_query)
+        if symbol is None:
+            return ToolResult("coverage_gap_analysis", "No matching symbol found.", {"coverage": []}, 0.1)
+        coverage = load_coverage(path)
+        impact = self.impact_analysis(symbol.name)
+        impacted_symbols = [
+            self.graph.symbols[item["symbol_id"]]
+            for item in impact.data.get("impacted_symbols", [])
+            if item.get("symbol_id") in self.graph.symbols
+        ]
+        targets = [symbol] + impacted_symbols
+        data = {
+            "coverage_path": str(path),
+            "root_symbol": self._symbol_view(symbol),
+            "coverage": [symbol_coverage(target, coverage) for target in targets],
+        }
+        gaps = [
+            item
+            for item in data["coverage"]
+            if item.get("coverage_status") != "covered"
+        ]
+        summary = (
+            f"Coverage analysis checked {len(targets)} symbols and found "
+            f"{len(gaps)} symbols with unknown or partial coverage."
+        )
+        return ToolResult("coverage_gap_analysis", summary, data, 0.8)
+
+    def runtime_trace_analysis(self, symbol_query: str, trace_path: str = "runtime_traces.json") -> ToolResult:
+        path = self._resolve_artifact_path(trace_path)
+        if not path.exists():
+            return ToolResult(
+                "runtime_trace_analysis",
+                f"No runtime trace file found at {path}.",
+                {"trace_path": str(path), "runtime_edges": []},
+                0.2,
+            )
+        symbol = self._best_symbol(symbol_query)
+        if symbol is None:
+            return ToolResult("runtime_trace_analysis", "No matching symbol found.", {"runtime_edges": []}, 0.1)
+        traces = load_runtime_traces(path)
+        edges = runtime_edges_for_symbol(symbol.name, traces)
+        data = {
+            "trace_path": str(path),
+            "symbol": self._symbol_view(symbol),
+            "runtime_edges": edges,
+            "note": "Runtime evidence covers only executed paths and should complement static impact analysis.",
+        }
+        summary = f"Runtime trace analysis found {len(edges)} observed runtime edges for {symbol.name}."
+        return ToolResult("runtime_trace_analysis", summary, data, 0.78 if edges else 0.45)
+
     def repository_summary(self) -> ToolResult:
         languages = Counter(record.language for record in self.graph.index.files.values())
         kinds = Counter(symbol.kind for symbol in self.graph.symbols.values())
@@ -245,6 +398,25 @@ class CodeIntelligenceTools:
             "file_path": edge.file_path,
             "line": edge.line,
         }
+
+    def _symbol_view(self, symbol: CodeSymbol) -> Dict:
+        return {
+            "symbol_id": symbol.symbol_id,
+            "name": symbol.name,
+            "kind": symbol.kind,
+            "file_path": symbol.file_path,
+            "line_start": symbol.line_start,
+            "line_end": symbol.line_end,
+            "language": symbol.language,
+        }
+
+    def _resolve_artifact_path(self, path: str) -> object:
+        from pathlib import Path
+
+        candidate = Path(path)
+        if candidate.is_absolute():
+            return candidate
+        return Path(self.graph.index.root) / candidate
 
     def _function_schema(self, name: str, description: str, parameters: Dict) -> Dict:
         return {

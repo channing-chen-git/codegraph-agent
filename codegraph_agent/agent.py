@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Callable, Dict, List
+from typing import Callable, Dict, List, Tuple
 
 from .graph_store import CodeGraph
 from .llm import LLMClient, LLMResult
 from .models import AgentResponse, ToolResult
 from .repository_indexer import RepositoryIndexer
+from .runtime.memory import ConversationMemory, SessionMemoryStore
 from .runtime.trace import TraceRecorder
 from .tools.code_tools import CodeIntelligenceTools
 
@@ -23,6 +24,8 @@ class CodeGraphAgent:
         require_llm: bool = True,
         llm_client: LLMClient | None = None,
         graph: CodeGraph | None = None,
+        memory_dir: str | Path = "runs/memory",
+        max_rounds: int = 2,
     ):
         self.repo_path = Path(repo_path)
         self.graph: CodeGraph = graph or RepositoryIndexer().build(self.repo_path)
@@ -31,43 +34,104 @@ class CodeGraphAgent:
         self.use_llm = use_llm
         self.require_llm = require_llm
         self.llm = llm_client or LLMClient()
+        self.memory_store = SessionMemoryStore(memory_dir)
+        self.max_rounds = max(1, max_rounds)
 
-    def answer(self, query: str) -> AgentResponse:
+    def answer(self, query: str, session_id: str | None = None) -> AgentResponse:
         trace = TraceRecorder(self.trace_dir)
-        plan, planner_result = self._plan(query)
-        trace.add(
-            "plan_tools",
-            "llm_planner" if planner_result.used_llm else "deterministic_planner",
-            query,
-            self._planner_summary(plan, planner_result),
-            0.9 if planner_result.used_llm else 0.75,
+        memory_enabled = bool(session_id)
+        memory = self.memory_store.load(session_id) if memory_enabled else ConversationMemory(session_id="")
+        working_query = self._enrich_query_with_memory(query, memory)
+        round_plans: List[List[tuple[str, str, Callable[[str], ToolResult]]]] = []
+        round_errors: List[str] = []
+        round_summaries: List[str] = []
+        last_evidence: List[Dict] = []
+        last_tools_used: List[str] = []
+        last_answer = ""
+        last_confidence_values: List[float] = []
+        active_rounds = 0
+        fatal_error = ""
+
+        try:
+            for round_index in range(1, self.max_rounds + 1):
+                active_rounds = round_index
+                plan, planner_result = self._safe_plan(working_query)
+                round_plans.append(plan)
+                trace.add(
+                    "plan_tools",
+                    "llm_planner" if planner_result.used_llm else "deterministic_planner",
+                    working_query,
+                    self._planner_summary(plan, planner_result),
+                    0.9 if planner_result.used_llm else 0.75,
+                    round_index=round_index,
+                    status="ok" if plan else "fallback",
+                    error=planner_result.error,
+                )
+                evidence, tools_used, summaries, confidence_values, round_error = self._execute_plan(
+                    trace,
+                    plan,
+                    working_query,
+                    round_index,
+                )
+                round_summaries.extend(summaries)
+                last_evidence = evidence
+                last_tools_used = tools_used
+                last_confidence_values = confidence_values
+                if round_error:
+                    round_errors.append(round_error)
+                answer, composer_result = self._compose_answer(working_query, summaries, evidence)
+                last_answer = answer
+                trace.add(
+                    "compose_grounded_answer",
+                    "llm_composer" if composer_result.used_llm else "template_composer",
+                    working_query,
+                    self._composer_summary(composer_result),
+                    0.88 if composer_result.used_llm else 0.72,
+                    round_index=round_index,
+                    status="ok" if answer else "fallback",
+                    error=composer_result.error,
+                )
+                if not self._needs_follow_up(answer, confidence_values, round_errors, composer_result, round_index):
+                    break
+                working_query = self._follow_up_query(query, answer, evidence, memory)
+        except Exception as exc:  # pragma: no cover - final guardrail
+            fatal_error = f"{type(exc).__name__}: {exc}"
+            round_errors.append(fatal_error)
+            trace.add(
+                "agent_error",
+                "runtime_guardrail",
+                working_query,
+                fatal_error,
+                0.0,
+                round_index=active_rounds or 1,
+                status="error",
+                error=fatal_error,
+            )
+            if not last_answer:
+                last_answer = (
+                    "CodeGraphAgent hit an internal error while processing the request. "
+                    "Please retry or switch to deterministic mode."
+                )
+
+        confidence = sum(last_confidence_values) / max(1, len(last_confidence_values))
+        memory_path = ""
+        if memory_enabled:
+            memory.record_turn(query, last_answer, last_tools_used, round_summaries, confidence)
+            memory_path = str(self.memory_store.save(memory))
+        trace_path = trace.save(last_answer)
+        return AgentResponse(
+            last_answer,
+            last_tools_used,
+            last_evidence,
+            trace_path,
+            round(confidence, 3),
+            session_id=session_id or "",
+            memory_path=memory_path,
+            rounds=max(1, len(round_plans)),
+            errors=round_errors,
         )
-        evidence = []
-        tools_used = []
-        summaries = []
-        confidence_values = []
 
-        for step_name, tool_name, tool_fn in plan:
-            result = tool_fn(query)
-            trace.add(step_name, tool_name, query, result.summary, result.confidence)
-            tools_used.append(tool_name)
-            summaries.append(result.summary)
-            evidence.append({"tool": result.tool, "data": result.data})
-            confidence_values.append(result.confidence)
-
-        answer, composer_result = self._compose_answer(query, summaries, evidence)
-        trace.add(
-            "compose_grounded_answer",
-            "llm_composer" if composer_result.used_llm else "template_composer",
-            query,
-            self._composer_summary(composer_result),
-            0.88 if composer_result.used_llm else 0.72,
-        )
-        trace_path = trace.save(answer)
-        confidence = sum(confidence_values) / max(1, len(confidence_values))
-        return AgentResponse(answer, tools_used, evidence, trace_path, round(confidence, 3))
-
-    def _plan(self, query: str) -> tuple[List[tuple[str, str, Callable[[str], ToolResult]]], LLMResult]:
+    def _safe_plan(self, query: str) -> tuple[List[tuple[str, str, Callable[[str], ToolResult]]], LLMResult]:
         if self.use_llm:
             llm_result = self._llm_plan(query)
             tool_names = self._parse_tool_plan(llm_result.content) if llm_result.used_llm else []
@@ -82,7 +146,137 @@ class CodeGraphAgent:
             model=self.llm.model,
             error="Using deterministic planner fallback",
         )
+        external_plan = self._external_evidence_plan(query)
+        if external_plan:
+            return external_plan, fallback
         return self._deterministic_plan(query), fallback
+
+    def _execute_plan(
+        self,
+        trace: TraceRecorder,
+        plan: List[tuple[str, str, Callable[[str], ToolResult]]],
+        query: str,
+        round_index: int,
+    ) -> tuple[List[Dict], List[str], List[str], List[float], str]:
+        evidence: List[Dict] = []
+        tools_used: List[str] = []
+        summaries: List[str] = []
+        confidence_values: List[float] = []
+        round_error = ""
+        for step_name, tool_name, tool_fn in plan:
+            try:
+                result = tool_fn(query)
+                trace.add(
+                    step_name,
+                    tool_name,
+                    query,
+                    result.summary,
+                    result.confidence,
+                    round_index=round_index,
+                    status="ok",
+                )
+            except Exception as exc:  # pragma: no cover - defensive guardrail
+                round_error = f"{tool_name}: {type(exc).__name__}: {exc}"
+                result = ToolResult(
+                    tool=tool_name,
+                    summary=f"Tool execution failed: {round_error}",
+                    data={"error": round_error},
+                    confidence=0.0,
+                )
+                trace.add(
+                    step_name,
+                    tool_name,
+                    query,
+                    result.summary,
+                    result.confidence,
+                    round_index=round_index,
+                    status="error",
+                    error=round_error,
+                )
+            tools_used.append(tool_name)
+            summaries.append(result.summary)
+            evidence.append({"tool": result.tool, "data": result.data})
+            confidence_values.append(result.confidence)
+        return evidence, tools_used, summaries, confidence_values, round_error
+
+    def _follow_up_query(self, original_query: str, answer: str, evidence: List[Dict], memory: ConversationMemory) -> str:
+        evidence_blob = json.dumps(evidence, ensure_ascii=False)[:1200]
+        if memory.summary:
+            return (
+                f"{original_query}\n\n"
+                f"Previous memory summary:\n{memory.summary}\n\n"
+                f"Previous answer:\n{answer}\n\n"
+                f"Tool evidence:\n{evidence_blob}\n\n"
+                "If evidence is still insufficient, choose more precise tools."
+            )
+        return (
+            f"{original_query}\n\n"
+            f"Previous answer:\n{answer}\n\n"
+            f"Tool evidence:\n{evidence_blob}\n\n"
+            "If evidence is still insufficient, choose more precise tools."
+        )
+
+    def _enrich_query_with_memory(self, query: str, memory: ConversationMemory) -> str:
+        if not memory.turns and not memory.summary:
+            return query
+        return f"{query}\n\nConversation memory:\n{memory.context_blob()}"
+
+    def _needs_follow_up(
+        self,
+        answer: str,
+        confidence_values: List[float],
+        round_errors: List[str],
+        composer_result: LLMResult,
+        round_index: int,
+    ) -> bool:
+        if round_index >= self.max_rounds:
+            return False
+        if not self.use_llm:
+            return False
+        if round_errors:
+            return True
+        if not composer_result.used_llm:
+            return True
+        if self._looks_uncertain(answer):
+            return True
+        if not confidence_values:
+            return True
+        return sum(confidence_values) / len(confidence_values) < 0.72
+
+    def _looks_uncertain(self, answer: str) -> bool:
+        lowered = answer.lower()
+        markers = [
+            "insufficient",
+            "uncertain",
+            "maybe",
+            "unknown",
+            "need more",
+            "not enough",
+            "无法",
+            "不够",
+            "需要更多",
+            "可能",
+        ]
+        return any(marker in lowered for marker in markers)
+
+    def _external_evidence_plan(self, query: str) -> List[tuple[str, str, Callable[[str], ToolResult]]]:
+        lowered = query.lower()
+        plan: List[tuple[str, str, Callable[[str], ToolResult]]] = [
+            ("observe_repository", "repository_summary", lambda _: self.tools.repository_summary())
+        ]
+        if any(keyword in lowered for keyword in ["pr", "diff", "pull request", "changed files"]):
+            plan.append(("analyze_pr_diff", "pr_change_analysis", self.tools.pr_change_analysis))
+            plan.append(("recommend_tests", "test_recommendations", self.tools.test_recommendations))
+            return plan
+        if any(keyword in lowered for keyword in ["coverage", "uncovered", "missing test", "test gap"]):
+            plan.append(("analyze_coverage_gaps", "coverage_gap_analysis", self.tools.coverage_gap_analysis))
+            plan.append(("recommend_tests", "test_recommendations", self.tools.test_recommendations))
+            return plan
+        if any(keyword in lowered for keyword in ["runtime", "trace", "observed", "production call"]):
+            plan.append(("analyze_runtime_traces", "runtime_trace_analysis", self.tools.runtime_trace_analysis))
+            plan.append(("analyze_reverse_dependencies", "impact_analysis", self.tools.impact_analysis))
+            return plan
+        return []
 
     def _deterministic_plan(self, query: str) -> List[tuple[str, str, Callable[[str], ToolResult]]]:
         lowered = query.lower()
@@ -138,6 +332,9 @@ class CodeGraphAgent:
             "call_chain",
             "impact_analysis",
             "test_recommendations",
+            "pr_change_analysis",
+            "coverage_gap_analysis",
+            "runtime_trace_analysis",
         }
         cleaned = []
         for tool in tools:
@@ -167,6 +364,9 @@ class CodeGraphAgent:
             "call_chain": ("trace_call_chain", self.tools.call_chain),
             "impact_analysis": ("analyze_reverse_dependencies", self.tools.impact_analysis),
             "test_recommendations": ("recommend_tests", self.tools.test_recommendations),
+            "pr_change_analysis": ("analyze_pr_diff", self.tools.pr_change_analysis),
+            "coverage_gap_analysis": ("analyze_coverage_gaps", self.tools.coverage_gap_analysis),
+            "runtime_trace_analysis": ("analyze_runtime_traces", self.tools.runtime_trace_analysis),
         }
         return [(registry[name][0], name, registry[name][1]) for name in tool_names if name in registry]
 
